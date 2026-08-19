@@ -4,12 +4,18 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 from model import get_response
-from db import db, User, ChatHistory, init_db
+from db import db, User, ChatHistory
 
 # Load environment variables from .env file
 load_dotenv()
 
-app = Flask(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, "templates"),
+    static_folder=os.path.join(BASE_DIR, "static")
+)
 app.secret_key = os.environ.get("SECRET_KEY", "yojanagpt-super-secret-key-change-in-production")
 
 # Database Configuration
@@ -27,8 +33,22 @@ else:
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-# Initialize Database
-init_db(app)
+# Initialize SQLAlchemy
+db.init_app(app)
+
+_db_initialized = False
+
+@app.before_request
+def ensure_db_initialized():
+    """Lazily initialize database tables on first request"""
+    global _db_initialized
+    if not _db_initialized:
+        try:
+            with app.app_context():
+                db.create_all()
+            _db_initialized = True
+        except Exception as e:
+            print("Database lazy init note:", e)
 
 def get_firebase_config():
     """Retrieve Firebase client config securely from environment variables"""
