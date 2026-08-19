@@ -3,8 +3,12 @@ import numpy as np
 import re
 import os
 import requests
+from dotenv import load_dotenv
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+# Load environment variables
+load_dotenv()
 
 # ---------------- LOAD DATA ----------------
 df = pd.read_csv("updated_2.0_schemes.csv")
@@ -53,15 +57,17 @@ fallbacks = [
 
 import google.generativeai as genai
 
-# ---------------- GEMINI CONFIG ----------------
-GEMINI_API_KEY = "AIzaSyDgZEXSuHry5t2fL1B4k3AoGwEy62FGp5w"
+# ---------------- API CONFIG ----------------
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+
 gemini_model = None
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            gemini_model = genai.GenerativeModel(m.name)
-            break
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+    except Exception as e:
+        print("Gemini initialization error:", e)
 
 def get_ai_response(user_query):
     """Call Google Gemini when dataset cannot answer"""
