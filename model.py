@@ -1,5 +1,6 @@
 import os
 import re
+import math
 import requests
 from dotenv import load_dotenv
 
@@ -18,22 +19,73 @@ except Exception as e:
     np = None
 
 try:
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics.pairwise import cosine_similarity
-    SKLEARN_AVAILABLE = True
-except Exception as e:
-    print("Scikit-learn import note:", e)
-    SKLEARN_AVAILABLE = False
-    TfidfVectorizer = None
-    cosine_similarity = None
-
-try:
     import google.generativeai as genai
     GENAI_AVAILABLE = True
 except Exception as e:
     print("Google GenerativeAI import note:", e)
     GENAI_AVAILABLE = False
     genai = None
+
+# Pure NumPy TF-IDF Vectorizer
+class SimpleTfidfVectorizer:
+    def __init__(self):
+        self.vocab = {}
+        self.idf = []
+        
+    def fit_transform(self, raw_documents):
+        docs = [str(doc).split() for doc in raw_documents]
+        N = len(docs)
+        if N == 0:
+            return None
+            
+        vocab_set = {}
+        for doc in docs:
+            for word in set(doc):
+                vocab_set[word] = vocab_set.get(word, 0) + 1
+                
+        self.vocab = {word: i for i, word in enumerate(vocab_set.keys())}
+        self.idf = [math.log((N + 1) / (count + 1)) + 1 for count in vocab_set.values()]
+        
+        matrix = np.zeros((N, len(self.vocab)), dtype=np.float32)
+        for d_idx, doc in enumerate(docs):
+            if not doc:
+                continue
+            tf = {}
+            for word in doc:
+                tf[word] = tf.get(word, 0) + 1
+            for word, count in tf.items():
+                if word in self.vocab:
+                    w_idx = self.vocab[word]
+                    matrix[d_idx, w_idx] = (count / len(doc)) * self.idf[w_idx]
+                    
+            norm = np.linalg.norm(matrix[d_idx])
+            if norm > 0:
+                matrix[d_idx] = matrix[d_idx] / norm
+                
+        return matrix
+        
+    def transform(self, raw_documents):
+        docs = [str(doc).split() for doc in raw_documents]
+        matrix = np.zeros((len(docs), len(self.vocab)), dtype=np.float32)
+        for d_idx, doc in enumerate(docs):
+            if not doc:
+                continue
+            tf = {}
+            for word in doc:
+                tf[word] = tf.get(word, 0) + 1
+            for word, count in tf.items():
+                if word in self.vocab:
+                    w_idx = self.vocab[word]
+                    matrix[d_idx, w_idx] = (count / len(doc)) * self.idf[w_idx]
+            norm = np.linalg.norm(matrix[d_idx])
+            if norm > 0:
+                matrix[d_idx] = matrix[d_idx] / norm
+        return matrix
+
+def simple_cosine_similarity(query_vec, doc_matrix):
+    if query_vec is None or doc_matrix is None:
+        return np.array([0.0])
+    return np.dot(doc_matrix, query_vec.T).flatten()
 
 # Global cached dataset variables
 _df = None
@@ -52,8 +104,8 @@ def load_model_data():
     if _df is not None:
         return _df, _vectorizer, _X
 
-    if not PANDAS_AVAILABLE or not SKLEARN_AVAILABLE:
-        _df = pd.DataFrame() if PANDAS_AVAILABLE else None
+    if not PANDAS_AVAILABLE:
+        _df = None
         _vectorizer = None
         _X = None
         return _df, _vectorizer, _X
@@ -80,7 +132,7 @@ def load_model_data():
         if valid_cols and not df_data.empty:
             df_data["combined"] = df_data[valid_cols].agg(" ".join, axis=1)
             df_data["processed"] = df_data["combined"].apply(normalize)
-            _vectorizer = TfidfVectorizer()
+            _vectorizer = SimpleTfidfVectorizer()
             _X = _vectorizer.fit_transform(df_data["processed"])
         else:
             _vectorizer = None
@@ -89,7 +141,7 @@ def load_model_data():
         _df = df_data
     except Exception as e:
         print("Dataset loading note:", e)
-        _df = pd.DataFrame() if PANDAS_AVAILABLE else None
+        _df = None
         _vectorizer = None
         _X = None
 
@@ -175,7 +227,7 @@ def get_response(user_query):
 
     try:
         q_vec = vectorizer.transform([query])
-        scores = cosine_similarity(q_vec, X).flatten()
+        scores = simple_cosine_similarity(q_vec, X)
         
         # Get top matches
         top_indices = np.argsort(scores)[::-1]
