@@ -13,10 +13,16 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "yojanagpt-super-secret-key-change-in-production")
 
 # Database Configuration
-default_db_url = "sqlite:////tmp/yojanagpt.db" if os.environ.get("VERCEL") else "sqlite:///yojanagpt.db"
-db_url = os.environ.get("DATABASE_URL", default_db_url)
-if db_url == "sqlite:///yojanagpt.db" and os.environ.get("VERCEL"):
-    db_url = "sqlite:////tmp/yojanagpt.db"
+raw_db_url = os.environ.get("DATABASE_URL", "").strip()
+
+if os.environ.get("VERCEL") or os.environ.get("NOW_BUILDER"):
+    # Force writable /tmp directory on Vercel serverless containers
+    if not raw_db_url or raw_db_url.startswith("sqlite:"):
+        db_url = "sqlite:////tmp/yojanagpt.db"
+    else:
+        db_url = raw_db_url
+else:
+    db_url = raw_db_url if raw_db_url else "sqlite:///yojanagpt.db"
 
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
