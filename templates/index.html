@@ -914,18 +914,12 @@
 
     <!-- JavaScript -->
     <script>
-        // Firebase Configuration
-        const firebaseConfig = {
-            apiKey: "AIzaSyDgURDIBCmu7NjT7t-9bkvFB6yuP_GWyU4",
-            authDomain: "yojna-gpt.firebaseapp.com",
-            projectId: "yojna-gpt",
-            storageBucket: "yojna-gpt.firebasestorage.app",
-            messagingSenderId: "511316491020",
-            appId: "1:511316491020:web:ec7333486b938c40572729",
-            measurementId: "G-MVR7ZLE6M2"
-        };
-        firebase.initializeApp(firebaseConfig);
-        const auth = firebase.auth();
+        // Firebase Configuration (Loaded securely from server environment)
+        const firebaseConfig = {{ firebase_config | default({}) | tojson }};
+        if (firebaseConfig && firebaseConfig.apiKey) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = (typeof firebase !== 'undefined' && firebase.auth) ? firebase.auth() : null;
 
         // Listen for auth state
         auth.onAuthStateChanged((user) => {
