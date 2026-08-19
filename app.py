@@ -13,7 +13,12 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "yojanagpt-super-secret-key-change-in-production")
 
 # Database Configuration
-app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///yojanagpt.db")
+default_db_url = "sqlite:////tmp/yojanagpt.db" if os.environ.get("VERCEL") else "sqlite:///yojanagpt.db"
+db_url = os.environ.get("DATABASE_URL", default_db_url)
+if db_url == "sqlite:///yojanagpt.db" and os.environ.get("VERCEL"):
+    db_url = "sqlite:////tmp/yojanagpt.db"
+
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 # Initialize Database

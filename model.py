@@ -11,7 +11,16 @@ from sklearn.metrics.pairwise import cosine_similarity
 load_dotenv()
 
 # ---------------- LOAD DATA ----------------
-df = pd.read_csv("updated_2.0_schemes.csv")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, "updated_2.0_schemes.csv")
+
+if os.path.exists(CSV_PATH):
+    df = pd.read_csv(CSV_PATH)
+elif os.path.exists("updated_2.0_schemes.csv"):
+    df = pd.read_csv("updated_2.0_schemes.csv")
+else:
+    df = pd.DataFrame()
+
 df = df.fillna("")
 
 # ---------------- TEXT COLUMNS ----------------
