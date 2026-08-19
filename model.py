@@ -1,15 +1,39 @@
 import os
 import re
 import requests
-import pandas as pd
-import numpy as np
 from dotenv import load_dotenv
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import google.generativeai as genai
 
 # Load environment variables
 load_dotenv()
+
+# Safe optional imports for serverless environments
+try:
+    import pandas as pd
+    import numpy as np
+    PANDAS_AVAILABLE = True
+except Exception as e:
+    print("Pandas/NumPy import note:", e)
+    PANDAS_AVAILABLE = False
+    pd = None
+    np = None
+
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    SKLEARN_AVAILABLE = True
+except Exception as e:
+    print("Scikit-learn import note:", e)
+    SKLEARN_AVAILABLE = False
+    TfidfVectorizer = None
+    cosine_similarity = None
+
+try:
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
+except Exception as e:
+    print("Google GenerativeAI import note:", e)
+    GENAI_AVAILABLE = False
+    genai = None
 
 # Global cached dataset variables
 _df = None
@@ -23,39 +47,52 @@ def normalize(text):
     return text
 
 def load_model_data():
-    """Lazily load and vectorize dataset to ensure instantaneous module imports"""
+    """Lazily load and vectorize dataset safely for serverless runtimes"""
     global _df, _vectorizer, _X
-    if _df is not None and _vectorizer is not None and _X is not None:
+    if _df is not None:
+        return _df, _vectorizer, _X
+
+    if not PANDAS_AVAILABLE or not SKLEARN_AVAILABLE:
+        _df = pd.DataFrame() if PANDAS_AVAILABLE else None
+        _vectorizer = None
+        _X = None
         return _df, _vectorizer, _X
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CSV_PATH = os.path.join(BASE_DIR, "updated_2.0_schemes.csv")
 
-    if os.path.exists(CSV_PATH):
-        df_data = pd.read_csv(CSV_PATH)
-    elif os.path.exists("updated_2.0_schemes.csv"):
-        df_data = pd.read_csv("updated_2.0_schemes.csv")
-    else:
-        df_data = pd.DataFrame()
+    try:
+        if os.path.exists(CSV_PATH):
+            df_data = pd.read_csv(CSV_PATH)
+        elif os.path.exists("updated_2.0_schemes.csv"):
+            df_data = pd.read_csv("updated_2.0_schemes.csv")
+        else:
+            df_data = pd.DataFrame()
 
-    df_data = df_data.fillna("")
-    text_cols = [
-        'slug', 'details', 'benefits', 'eligibility',
-        'application', 'documents', 'level',
-        'schemeCategory', 'tags'
-    ]
-    valid_cols = [c for c in text_cols if c in df_data.columns]
-    
-    if valid_cols and not df_data.empty:
-        df_data["combined"] = df_data[valid_cols].agg(" ".join, axis=1)
-        df_data["processed"] = df_data["combined"].apply(normalize)
-        _vectorizer = TfidfVectorizer()
-        _X = _vectorizer.fit_transform(df_data["processed"])
-    else:
-        _vectorizer = TfidfVectorizer()
+        df_data = df_data.fillna("")
+        text_cols = [
+            'slug', 'details', 'benefits', 'eligibility',
+            'application', 'documents', 'level',
+            'schemeCategory', 'tags'
+        ]
+        valid_cols = [c for c in text_cols if c in df_data.columns]
+        
+        if valid_cols and not df_data.empty:
+            df_data["combined"] = df_data[valid_cols].agg(" ".join, axis=1)
+            df_data["processed"] = df_data["combined"].apply(normalize)
+            _vectorizer = TfidfVectorizer()
+            _X = _vectorizer.fit_transform(df_data["processed"])
+        else:
+            _vectorizer = None
+            _X = None
+
+        _df = df_data
+    except Exception as e:
+        print("Dataset loading note:", e)
+        _df = pd.DataFrame() if PANDAS_AVAILABLE else None
+        _vectorizer = None
         _X = None
 
-    _df = df_data
     return _df, _vectorizer, _X
 
 # ---------------- INTENT KEYWORDS ----------------
@@ -84,6 +121,9 @@ def get_gemini_model():
     if gemini_model is not None:
         return gemini_model
         
+    if not GENAI_AVAILABLE:
+        return None
+
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
     if GEMINI_API_KEY:
         try:
@@ -123,67 +163,74 @@ def get_response(user_query):
         ai_response = get_ai_response(user_query)
         if ai_response:
             return ai_response
-        return np.random.choice(fallbacks)
+        return fallbacks[0]
 
     # 👉 Search dataset
     df, vectorizer, X = load_model_data()
-    if df.empty or X is None:
+    if df is None or df.empty or vectorizer is None or X is None:
         ai_response = get_ai_response(user_query)
         if ai_response:
             return ai_response
-        return np.random.choice(fallbacks)
+        return fallbacks[0]
 
-    q_vec = vectorizer.transform([query])
-    scores = cosine_similarity(q_vec, X).flatten()
-    
-    # Get top matches
-    top_indices = np.argsort(scores)[::-1]
-    idx = top_indices[0]
-    best_score = scores[idx]
+    try:
+        q_vec = vectorizer.transform([query])
+        scores = cosine_similarity(q_vec, X).flatten()
+        
+        # Get top matches
+        top_indices = np.argsort(scores)[::-1]
+        idx = top_indices[0]
+        best_score = scores[idx]
 
-    # 👉 If match is extremely weak → use AI (threshold: 0.05)
-    if best_score < 0.05:
-        ai_response = get_ai_response(user_query)
-        if ai_response:
-            return ai_response
-        return np.random.choice(fallbacks)
+        # 👉 If match is extremely weak → use AI (threshold: 0.05)
+        if best_score < 0.05:
+            ai_response = get_ai_response(user_query)
+            if ai_response:
+                return ai_response
+            return fallbacks[0]
 
-    row = df.iloc[idx]
+        row = df.iloc[idx]
 
-    # 👉 Intent-based answer extraction
-    ans = ""
+        # 👉 Intent-based answer extraction
+        ans = ""
 
-    if any(w in query for w in benefit_words):
-        ans = str(row.get("benefits", "")).strip()
-    elif any(w in query for w in doc_words):
-        ans = str(row.get("documents", "")).strip()
-    elif any(w in query for w in elig_words):
-        ans = str(row.get("eligibility", "")).strip()
-    elif any(w in query for w in apply_words):
-        ans = str(row.get("application", "")).strip()
-    else:
-        # For generic scheme name queries, check multiple fields in priority order
-        ans = str(row.get("details", "")).strip()
-        if not ans or len(ans) < 5:
+        if any(w in query for w in benefit_words):
             ans = str(row.get("benefits", "")).strip()
-        if not ans or len(ans) < 5:
+        elif any(w in query for w in doc_words):
+            ans = str(row.get("documents", "")).strip()
+        elif any(w in query for w in elig_words):
             ans = str(row.get("eligibility", "")).strip()
-        if not ans or len(ans) < 5:
+        elif any(w in query for w in apply_words):
             ans = str(row.get("application", "")).strip()
-        if not ans or len(ans) < 5:
-            ans = str(row.get("schemeCategory", "")).strip()
+        else:
+            # For generic scheme name queries, check multiple fields in priority order
+            ans = str(row.get("details", "")).strip()
+            if not ans or len(ans) < 5:
+                ans = str(row.get("benefits", "")).strip()
+            if not ans or len(ans) < 5:
+                ans = str(row.get("eligibility", "")).strip()
+            if not ans or len(ans) < 5:
+                ans = str(row.get("application", "")).strip()
+            if not ans or len(ans) < 5:
+                ans = str(row.get("schemeCategory", "")).strip()
 
-    # 👉 If dataset answer empty → use AI
-    if not ans or len(ans) < 5:
+        # 👉 If dataset answer empty → use AI
+        if not ans or len(ans) < 5:
+            ai_response = get_ai_response(user_query)
+            if ai_response:
+                return ai_response
+            return fallbacks[0]
+
+        # 👉 Limit response length
+        sentences = ans.split(". ")
+        ans = ". ".join(sentences[:6])
+        if len(sentences) > 6:
+            ans += "."
+
+        return ans
+    except Exception as e:
+        print("Search calculation error:", e)
         ai_response = get_ai_response(user_query)
         if ai_response:
             return ai_response
-        return np.random.choice(fallbacks)
-
-    # 👉 Limit response length
-    sentences = ans.split(". ")
-    ans = ". ".join(sentences[:6])
-    if len(sentences) > 6:
-        ans += "."
-
-    return ans
+        return fallbacks[0]
