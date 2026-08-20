@@ -68,6 +68,7 @@ def home():
     return render_template("index.html", firebase_config=get_firebase_config())
 
 @app.route("/health", methods=["GET"])
+@app.route("/api/health", methods=["GET"])
 def health_check():
     """Health check endpoint validating server and database connection"""
     db_status = "healthy"
@@ -83,6 +84,7 @@ def health_check():
     }), 200
 
 @app.route("/signup", methods=["POST"])
+@app.route("/api/signup", methods=["POST"])
 def signup():
     """Handle user registration and store user in SQLite database"""
     data = request.get_json(silent=True) or {}
@@ -120,6 +122,7 @@ def signup():
         return jsonify({"success": False, "message": f"Database error: {str(e)}"}), 500
 
 @app.route("/login", methods=["POST"])
+@app.route("/api/login", methods=["POST"])
 def login():
     """Handle user login against SQLite database"""
     data = request.get_json(silent=True) or {}
@@ -142,17 +145,27 @@ def login():
     else:
         return jsonify({"success": False, "message": "Invalid email or password"}), 401
 
-@app.route("/logout", methods=["POST"])
+@app.route("/logout", methods=["POST", "GET"])
+@app.route("/api/logout", methods=["POST", "GET"])
 def logout():
     """Handle user logout"""
     session.clear()
     return jsonify({"success": True, "message": "Logged out successfully"})
 
-@app.route("/ask", methods=["POST"])
+@app.route("/ask", methods=["POST", "GET"])
+@app.route("/api/ask", methods=["POST", "GET"])
 def ask():
     """Handle chat messages and persist conversation history"""
-    data = request.get_json(silent=True) or {}
-    user_msg = data.get("message", "").strip()
+    if request.method == "GET":
+        user_msg = request.args.get("message", "").strip()
+        if not user_msg:
+            return jsonify({
+                "success": True,
+                "message": "The /ask endpoint is active. Please send a POST request with JSON payload: {\"message\": \"your question\"} or a GET parameter ?message=your_question"
+            }), 200
+    else:
+        data = request.get_json(silent=True) or {}
+        user_msg = data.get("message", "").strip()
     
     if not user_msg:
         return jsonify({"success": False, "reply": "Please provide a message"}), 400
@@ -179,6 +192,7 @@ def ask():
     })
 
 @app.route("/history", methods=["GET"])
+@app.route("/api/history", methods=["GET"])
 def history():
     """Retrieve chat history for the currently authenticated user"""
     user_id = session.get("user_id")
@@ -194,8 +208,19 @@ def history():
 @app.errorhandler(404)
 def not_found(e):
     if request.path.startswith("/ask") or request.path.startswith("/api") or request.is_json:
-        return jsonify({"success": False, "error": "Endpoint not found"}), 404
+        return jsonify({
+            "success": False,
+            "error": f"Endpoint '{request.path}' not found.",
+            "available_endpoints": ["/", "/ask", "/health", "/signup", "/login", "/logout", "/history"]
+        }), 404
     return render_template("index.html", firebase_config=get_firebase_config()), 404
+
+@app.errorhandler(405)
+def method_not_allowed(e):
+    return jsonify({
+        "success": False,
+        "error": f"Method {request.method} not allowed for {request.path}."
+    }), 405
 
 @app.errorhandler(500)
 def server_error(e):
